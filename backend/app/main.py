@@ -284,3 +284,13 @@ def location(location_id: int):
         )
 
     return result.iloc[0].to_dict()
+
+
+@app.get("/api/localities")
+def localities():
+    localities_file = Path(__file__).resolve().parent / "localities.json"
+    if localities_file.exists():
+        import json
+        with open(localities_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
