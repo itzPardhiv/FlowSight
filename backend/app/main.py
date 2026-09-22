@@ -7,6 +7,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .impact_engine import impact_engine, classify_exposure, DISCLAIMER_TEXT
+from .scenario_engine import scenario_engine, SCENARIO_DISCLAIMER
+from .bottleneck_engine import bottleneck_engine, BOTTLENECK_DISCLAIMER
+from .priority_engine import priority_engine, PRIORITY_DISCLAIMER
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_FILE = BASE_DIR / "data" / "locations_features.csv"
@@ -55,6 +59,9 @@ def root():
             "route_exposure_corridors",
             "citywide_summary",
             "geojson_export",
+            "historical_scenarios",
+            "drainage_bottlenecks",
+            "action_priority",
         ],
     }
 
@@ -470,4 +477,173 @@ def impact_geojson(
         raise HTTPException(
             status_code=500,
             detail=f"Error generating GeoJSON: {str(e)}",
+        )
+
+
+# =====================================================================
+# FEATURE 1: SCENARIO COMPARISON / EVENT REPLAY
+# =====================================================================
+
+@app.get("/api/scenarios")
+def get_scenarios():
+    """
+    FEATURE 1: Retrieve available model scenarios and event replays.
+    """
+    scenarios = scenario_engine.get_catalog()
+    return {
+        "count": len(scenarios),
+        "scenarios": scenarios,
+        "disclaimer": scenarios[0]["disclaimer"] if scenarios else "",
+    }
+
+
+@app.get("/api/scenarios/{scenario_id}")
+def get_scenario(scenario_id: str):
+    """
+    FEATURE 1: Retrieve scenario configuration and location impact distribution.
+    """
+    try:
+        return scenario_engine.get_scenario_details(scenario_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scenario '{scenario_id}' not found",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading scenario: {str(e)}",
+        )
+
+
+@app.get("/api/scenarios/{scenario_id}/compare")
+def compare_scenario(scenario_id: str):
+    """
+    FEATURE 1: Compare scenario risk against baseline model across all 1,013 locations.
+    """
+    try:
+        return scenario_engine.compare_scenario(scenario_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scenario '{scenario_id}' not found",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error comparing scenario: {str(e)}",
+        )
+
+
+# =====================================================================
+# FEATURE 2: POTENTIAL DRAINAGE BOTTLENECK DETECTION
+# =====================================================================
+
+@app.get("/api/impact/bottlenecks")
+def get_bottlenecks(
+    min_risk: float = Query(60.0, description="Minimum risk score threshold", ge=0.0, le=100.0),
+    radius: float = Query(1.5, description="Spatial cluster radius in km", ge=0.2, le=10.0),
+    limit: int = Query(10, description="Max bottleneck clusters to return", ge=1, le=50),
+):
+    """
+    FEATURE 2: Detect spatial convergence zones of high risk and transit corridors.
+    """
+    try:
+        results = bottleneck_engine.detect_bottlenecks(
+            min_risk=min_risk,
+            radius_km=radius,
+            limit=limit,
+        )
+        return {
+            "count": len(results),
+            "limit": limit,
+            "min_risk": min_risk,
+            "radius_km": radius,
+            "bottlenecks": results,
+            "disclaimer": results[0]["disclaimer"] if results else "",
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error detecting bottlenecks: {str(e)}",
+        )
+
+
+@app.get("/api/impact/bottlenecks/{bottleneck_id}")
+def get_bottleneck(bottleneck_id: str):
+    """
+    FEATURE 2: Retrieve full cluster details for a specific potential bottleneck zone.
+    """
+    try:
+        return bottleneck_engine.get_bottleneck_by_id(bottleneck_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Bottleneck '{bottleneck_id}' not found",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading bottleneck details: {str(e)}",
+        )
+
+
+# =====================================================================
+# FEATURE 3: ACTION PRIORITY DASHBOARD
+# =====================================================================
+
+@app.get("/api/priority")
+def get_priority_list(
+    limit: int = Query(10, description="Number of priority locations", ge=1, le=50),
+    scenario_id: Optional[str] = Query(None, description="Optional scenario ID for sensitivity testing"),
+):
+    """
+    FEATURE 3: Action Priority Index combining risk, radius, area, routes, bottleneck & sensitivity.
+    """
+    try:
+        priorities = priority_engine.compute_priorities(
+            scenario_id=scenario_id,
+            limit=limit,
+        )
+        return {
+            "count": len(priorities),
+            "limit": limit,
+            "scenario_id": scenario_id,
+            "priorities": priorities,
+            "disclaimer": priorities[0]["disclaimer"] if priorities else "",
+        }
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Scenario '{scenario_id}' not found",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error computing priority index: {str(e)}",
+        )
+
+
+@app.get("/api/priority/{location_id}")
+def get_priority_location(
+    location_id: int,
+    scenario_id: Optional[str] = Query(None, description="Optional scenario ID for sensitivity testing"),
+):
+    """
+    FEATURE 3: Complete priority breakdown and explanation for a single location.
+    """
+    try:
+        return priority_engine.get_priority_by_location_id(
+            location_id=location_id,
+            scenario_id=scenario_id,
+        )
+    except KeyError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Location {location_id} not found",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error loading priority for location {location_id}: {str(e)}",
         )
